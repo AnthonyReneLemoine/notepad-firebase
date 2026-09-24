@@ -24,6 +24,7 @@
   <h1>Notepad</h1>
   <span class="version">v9</span>
   <div id="status" role="status" aria-live="polite"><div id="dot"></div><span id="stTxt">Connexion...</span></div>
+  <button id="btnExport" class="btn" onclick="exportNotes()" disabled>Exporter les notes</button>
   <div id="userInfo" style="display:none">
     <span id="userEmail"></span>
     <button id="btnSignOut" onclick="handleSignOut()">Déconnexion</button>
@@ -35,6 +36,7 @@
     <div class="sb-tabs">
       <button type="button" id="tabNotes" class="sb-tab active" aria-pressed="true" onclick="switchTab('notes')">Notes <span class="tab-count" id="countNotes">0</span></button>
       <button type="button" id="tabArch" class="sb-tab arch-tab" aria-pressed="false" onclick="switchTab('archived')">Archives <span class="tab-count" id="countArch">0</span></button>
+      <button type="button" id="tabTrash" class="sb-tab" aria-pressed="false" onclick="switchTab('trash')">Corbeille <span class="tab-count" id="countTrash">0</span></button>
     </div>
     <div class="sb-top">
       <input type="text" id="search" aria-label="Rechercher dans les notes" placeholder="Recherche rapide..." oninput="renderList()">
@@ -59,6 +61,8 @@
         <button class="btn" id="btnDupl" onclick="duplicateNote()">Dupliquer</button>
         <button class="btn" id="btnPin" onclick="togglePin()">Épingler</button>
         <button class="btn" id="btnArch" onclick="toggleArchive()">Action</button>
+        <button class="btn" id="btnHistory" onclick="showHistory()">Historique</button>
+        <button class="btn" id="btnRestore" onclick="restoreNote()" hidden>Restaurer la note</button>
         <button class="btn" id="btnExpand" aria-pressed="false" onclick="toggleEditorExpanded()">Plein écran</button>
         <button class="btn" id="btnClose" onclick="hideEditor()" title="Fermer la note" aria-label="Fermer la note">✕</button>
       </div>
@@ -77,7 +81,7 @@
     </div>
     <textarea id="body" aria-label="Contenu de la note" placeholder="Commencez à écrire..."></textarea>
     <div style="text-align:right; padding-top:10px">
-      <button style="background:none; border:none; color:var(--danger); cursor:pointer; font-size:0.8rem" onclick="deleteNote()">Supprimer définitivement</button>
+      <button id="btnDelete" class="danger-link" onclick="deleteNote()">Mettre à la corbeille</button>
     </div>
   </main>
 </div>
@@ -100,6 +104,22 @@
 </div>
 
 <div id="overlay"><div class="spinner"></div></div>
+<dialog id="unsavedDialog" aria-labelledby="unsavedTitle">
+  <form method="dialog">
+    <h2 id="unsavedTitle">Modifications non enregistrées</h2>
+    <p>Souhaitez-vous enregistrer cette note avant de continuer ?</p>
+    <div class="dialog-actions">
+      <button class="btn" value="cancel" autofocus>Annuler</button>
+      <button class="btn" value="discard">Ne pas enregistrer</button>
+      <button class="btn primary" value="save">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="historyDialog" aria-labelledby="historyTitle">
+  <div class="dialog-heading"><h2 id="historyTitle">Versions précédentes</h2><button class="btn" onclick="document.getElementById('historyDialog').close()" aria-label="Fermer l’historique">✕</button></div>
+  <p>Les 20 dernières versions sont conservées lors des prochains enregistrements.</p>
+  <div id="historyList"></div>
+</dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 
 <script type="module" src="app.js"></script>

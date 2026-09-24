@@ -1,6 +1,7 @@
+import { contentOf, sameContent, historyOf, savedNote, revisionMatches, matchesTab, exportNotebook } from "./notes.js";
 import { readPreference, writePreference } from "./preferences.js";
 import { initializeApp } from "firebase/app";
-  import { getDatabase, ref, onValue, set, update, remove } from "firebase/database";
+  import { getDatabase, ref, onValue, set, update, runTransaction } from "firebase/database";
   import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 
   const firebaseConfig = {
@@ -19,6 +20,9 @@ import { initializeApp } from "firebase/app";
 
   let notes = [];
   let currentId = null;
+  let editorBase = null;
+  let isSaving = false;
+  let navigationToken = 0;
   let currentTab = "notes";
   let selectedTag = "a-gmva-expo";
   let dbUnsubscribe = null;
@@ -57,6 +61,7 @@ import { initializeApp } from "firebase/app";
   };
 
   window.handleSignOut = async () => {
+    if (!await canLeaveEditor()) return;
     if (dbUnsubscribe) { dbUnsubscribe(); dbUnsubscribe = null; }
     await signOut(auth);
   };
@@ -79,12 +84,15 @@ import { initializeApp } from "firebase/app";
       document.getElementById("loginEmail").value = "";
       document.getElementById("loginPassword").value = "";
       document.getElementById("loginError").textContent = "";
+      document.getElementById("btnExport").disabled = false;
       init();
     } else {
       // User is signed out
       if (dbUnsubscribe) { dbUnsubscribe(); dbUnsubscribe = null; }
       notes = [];
       currentId = null;
+      editorBase = null;
+      document.getElementById("btnExport").disabled = true;
       document.getElementById("loginScreen").classList.remove("hidden");
       document.getElementById("userInfo").style.display = "none";
       document.getElementById("overlay").style.display = "none";
@@ -118,7 +126,7 @@ import { initializeApp } from "firebase/app";
       btn.type = "button";
       btn.textContent = "×";
       btn.setAttribute("aria-label", `Retirer l’étiquette ${tag}`);
-      btn.onclick = () => { currentTags = currentTags.filter(t => t !== tag); renderTagChips(); };
+      btn.onclick = () => { currentTags = currentTags.filter(t => t !== tag); renderTagChips(); refreshSaveStatus(); };
       chip.appendChild(label);
       chip.appendChild(btn);
       chips.appendChild(chip);
@@ -132,6 +140,7 @@ import { initializeApp } from "firebase/app";
     renderTagChips();
     document.getElementById("tagInput").value = "";
     closeTagDropdown();
+    refreshSaveStatus();
   }
 
   function closeTagDropdown() {
@@ -206,6 +215,7 @@ import { initializeApp } from "firebase/app";
     } else if (e.key === "Backspace" && !e.target.value && currentTags.length > 0) {
       currentTags.pop();
       renderTagChips();
+      refreshSaveStatus();
     }
   });
 
@@ -251,6 +261,7 @@ import { initializeApp } from "firebase/app";
         currentColor = c.key;
         renderColorSwatches();
         document.getElementById("editor").style.background = getColorBg(c.key);
+        refreshSaveStatus();
       };
       wrap.appendChild(sw);
     });
@@ -260,32 +271,41 @@ import { initializeApp } from "firebase/app";
     document.getElementById("overlay").style.display = "flex";
     dbUnsubscribe = onValue(ref(db, 'notes'), (snapshot) => {
       const data = snapshot.val();
-      notes = data ? Object.values(data) : [];
+      notes = data ? Object.entries(data).filter(([, value]) => value && typeof value === "object").map(([id, value]) => ({...value, id})) : [];
       renderTagFilter();
       renderList();
       updateCounts();
       document.getElementById("overlay").style.display = "none";
-      setStatus("Prêt", "saved");
+      refreshSaveStatus();
+    }, () => {
+      document.getElementById("overlay").style.display = "none";
+      setStatus("Accès aux notes impossible", "error");
+      showToast("Impossible de charger les notes. Vérifiez la connexion et les droits d’accès.");
     });
   }
 
-  window.switchTab = (tab) => {
+  function setTab(tab) {
     currentTab = tab;
-    selectedTag = (tab === "notes") ? "a-gmva-expo" : null;
-    document.getElementById("tabNotes").classList.toggle("active", tab === "notes");
-    document.getElementById("tabNotes").setAttribute("aria-pressed", String(tab === "notes"));
-    document.getElementById("tabArch").classList.toggle("active", tab === "archived");
-    document.getElementById("tabArch").setAttribute("aria-pressed", String(tab === "archived"));
+    selectedTag = (tab === 'notes') ? 'a-gmva-expo' : null;
+    for (const [id, value] of [['tabNotes','notes'], ['tabArch','archived'], ['tabTrash','trash']]) {
+      document.getElementById(id).classList.toggle('active', tab === value);
+      document.getElementById(id).setAttribute('aria-pressed', String(tab === value));
+    }
     renderTagFilter();
     renderList();
-    if (currentId) hideEditor();
+  }
+  window.switchTab = async tab => {
+    const token = ++navigationToken;
+    if (!await canLeaveEditor() || token !== navigationToken) return;
+    closeEditor();
+    setTab(tab);
   };
 
   window.renderTagFilter = () => {
     const $tf = document.getElementById("tagFilter");
     $tf.innerHTML = "";
     const allTags = new Set();
-    notes.filter(n => !!n.archived === (currentTab === "archived")).forEach(n => {
+    notes.filter(n => matchesTab(n, currentTab)).forEach(n => {
       if (n.tags) n.tags.split(',').forEach(t => {
         const clean = t.trim();
         if (clean) allTags.add(clean);
@@ -320,7 +340,7 @@ import { initializeApp } from "firebase/app";
 
   function getFilteredNotes(query) {
     return notes.filter(n => {
-      const matchTab = !!n.archived === (currentTab === "archived");
+      const matchTab = matchesTab(n, currentTab);
       const matchSearch = (n.title + n.body + n.tags).toLowerCase().includes(query);
       const matchTag = !selectedTag || (n.tags && n.tags.split(',').map(t=>t.trim()).includes(selectedTag));
       return matchTab && matchSearch && matchTag;
@@ -339,11 +359,11 @@ import { initializeApp } from "firebase/app";
   }
 
   async function reorderNotes(dragId, targetId, pinnedState) {
-    if (!dragId || !targetId || dragId === targetId) return;
+    if (currentTab === "trash" || !dragId || !targetId || dragId === targetId) return;
 
     const ordered = sortNotesForDisplay(
       notes.filter(n =>
-        !!n.archived === (currentTab === "archived") &&
+        matchesTab(n, currentTab) &&
         !!n.pinned === pinnedState
       )
     );
@@ -417,7 +437,7 @@ import { initializeApp } from "firebase/app";
     const tagList = note.tags ? note.tags.split(',').map(t => t.trim()).filter(t => t !== "") : [];
     const el = document.createElement("div");
     el.className = "ni" + (note.id === currentId ? " active" : "");
-    el.draggable = true;
+    el.draggable = !note.deletedAt;
     el.dataset.noteId = note.id;
 
     el.tabIndex = 0;
@@ -451,7 +471,7 @@ import { initializeApp } from "firebase/app";
     const bg = getColorBg(note.color || "default");
     el.style.background = bg;
 
-    bindCardDnD(el, note);
+    if (!note.deletedAt) bindCardDnD(el, note);
 
     el.onclick = () => {
       if (justDropped) return;
@@ -484,129 +504,262 @@ import { initializeApp } from "firebase/app";
     regularNotes.forEach(n => $list.appendChild(createNoteCard(n)));
   };
 
-  window.openNote = async (id) => {
-    const note = notes.find(n => n.id === id);
-    if (!note) return;
-    currentId = id;
-    
-    // Mettre à jour la date de consultation sans changer l'ordre manuel
-    await update(ref(db, 'notes/' + id), { updatedAt: Date.now() });
-
-    document.getElementById("title").value = note.title;
-    document.getElementById("body").value = note.body;
-    currentTags = note.tags ? note.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
-    currentColor = note.color || "default";
-    renderTagChips();
-    renderColorSwatches();
-    document.getElementById("editor").style.background = getColorBg(currentColor);
-    document.getElementById("tagInput").value = "";
-    document.getElementById("btnArch").textContent = note.archived ? "Restaurer" : "Archiver";
-    document.getElementById("btnPin").textContent = note.pinned ? "Désépingler" : "Épingler";
-    document.getElementById("editor").classList.remove("hide");
-    document.querySelector(".app").classList.add("editor-open");
-    renderList();
-  };
-
-  window.duplicateNote = async () => {
-    if (!currentId) return;
-    const original = notes.find(n => n.id === currentId);
-    const newId = "note_" + Date.now();
-    const copy = {
-      ...original,
-      id: newId,
-      title: original.title + " (Copie)",
-      date: getFrenchDate(),
-      updatedAt: Date.now(),
-      order: Number.isFinite(original.order) ? original.order + 0.1 : null,
-      pinned: !!original.pinned
+  function draftFromEditor() {
+    const tags = [...currentTags];
+    document.getElementById('tagInput').value.split(',').map(t => t.trim()).filter(Boolean).forEach(t => {
+      if (!tags.includes(t)) tags.push(t);
+    });
+    return {
+      id: currentId,
+      title: document.getElementById('title').value,
+      body: document.getElementById('body').value,
+      tags: tags.join(', '), color: currentColor
     };
-    await set(ref(db, 'notes/' + newId), copy);
-    openNote(newId);
-    showToast("Note dupliquée ✓");
-  };
+  }
 
-  window.createNewNote = () => {
-    currentId = "note_" + Date.now();
-    document.getElementById("title").value = "";
-    document.getElementById("body").value = "";
-    currentTags = (selectedTag && selectedTag !== "Tous") ? [selectedTag] : [];
-    currentColor = "default";
+  function isDirty() {
+    if (!currentId || editorBase?.deletedAt) return false;
+    const draft = draftFromEditor();
+    if (!editorBase) return Boolean(draft.title || draft.body || draft.tags || draft.color !== 'default');
+    return !sameContent(draft, editorBase);
+  }
+
+  function refreshSaveStatus() {
+    if (isSaving) return;
+    setStatus(isDirty() ? 'Modifications non enregistrées' : 'Prêt', isDirty() ? 'saving' : 'saved');
+  }
+
+  async function canLeaveEditor() {
+    if (isSaving) return false;
+    if (!isDirty()) return true;
+    const dialog = document.getElementById('unsavedDialog');
+    if (dialog.open) return false;
+    dialog.returnValue = 'cancel';
+    const choice = new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue), {once:true}));
+    dialog.showModal();
+    const answer = await choice;
+    return answer === 'discard' || (answer === 'save' && await saveCurrentNote());
+  }
+
+  function displayNote(note, isNew = false) {
+    currentId = note.id;
+    editorBase = isNew ? null : JSON.parse(JSON.stringify(note));
+    const content = contentOf(note);
+    document.getElementById('title').value = content.title;
+    document.getElementById('body').value = content.body;
+    currentTags = content.tags.split(',').map(t => t.trim()).filter(Boolean);
+    currentColor = content.color;
     renderTagChips();
     renderColorSwatches();
-    document.getElementById("editor").style.background = getColorBg("default");
-    document.getElementById("tagInput").value = "";
-    document.getElementById("btnArch").textContent = "Archiver";
-    document.getElementById("btnPin").textContent = "Épingler";
-    document.getElementById("editor").classList.remove("hide");
-    document.querySelector(".app").classList.add("editor-open");
-    document.getElementById("title").focus();
+    const editor = document.getElementById('editor');
+    editor.style.background = getColorBg(currentColor);
+    editor.classList.toggle('is-trash', Boolean(note.deletedAt));
+    document.getElementById('tagInput').value = '';
+    document.getElementById('title').readOnly = Boolean(note.deletedAt);
+    document.getElementById('body').readOnly = Boolean(note.deletedAt);
+    for (const id of ['btnSave', 'btnDupl', 'btnPin', 'btnArch']) document.getElementById(id).hidden = Boolean(note.deletedAt);
+    document.getElementById('btnRestore').hidden = !note.deletedAt;
+    document.getElementById('btnHistory').disabled = isNew || !historyOf(note).length;
+    document.getElementById('btnArch').textContent = note.archived ? 'Restaurer des archives' : 'Archiver';
+    document.getElementById('btnPin').textContent = note.pinned ? 'Désépingler' : 'Épingler';
+    document.getElementById('btnDelete').textContent = note.deletedAt ? 'Supprimer définitivement' : 'Mettre à la corbeille';
+    editor.classList.remove('hide');
+    document.querySelector('.app').classList.add('editor-open');
+    renderList();
+    refreshSaveStatus();
+  }
+
+  window.openNote = async id => {
+    const token = ++navigationToken;
+    if (!await canLeaveEditor() || token !== navigationToken) return;
+    const note = notes.find(n => n.id === id);
+    if (note) displayNote(note);
+  };
+
+  window.createNewNote = async () => {
+    const token = ++navigationToken;
+    if (!await canLeaveEditor() || token !== navigationToken) return;
+    if (currentTab !== 'notes') setTab('notes');
+    displayNote({id: 'note_' + crypto.randomUUID(), tags: selectedTag || '', color:'default'}, true);
+    document.getElementById('title').focus();
   };
 
   window.saveCurrentNote = async () => {
-    if (!currentId) return;
-    const note = notes.find(n => n.id === currentId) || {};
-    const updatedNote = {
-      id: currentId,
-      title: document.getElementById("title").value,
-      body: document.getElementById("body").value,
-      tags: currentTags.join(', '),
-      color: currentColor,
-      date: getFrenchDate(),
-      updatedAt: Date.now(),
-      archived: note.archived || false,
-      order: Number.isFinite(note.order) ? note.order : null,
-      pinned: note.pinned || false
-    };
-    setStatus("Sauvegarde...", "saving");
+    if (!currentId || editorBase?.deletedAt || isSaving) return false;
+    const draft = draftFromEditor();
+    const id = currentId;
+    const baseline = editorBase;
+    const now = Date.now();
+    if (baseline && sameContent(baseline, draft)) return true;
+    isSaving = true;
+    document.getElementById('btnSave').disabled = true;
+    setStatus('Sauvegarde…', 'saving');
     try {
-      await set(ref(db, 'notes/' + currentId), updatedNote);
-      setStatus("Prêt", "saved");
-      showToast("Enregistré ✓");
-    } catch (e) { setStatus("Erreur", "error"); }
+      const result = await runTransaction(ref(db, 'notes/' + id), current => {
+        if (!revisionMatches(current, baseline) || current?.deletedAt) return;
+        return savedNote(current, {...draft, date: getFrenchDate()}, now);
+      }, {applyLocally:false});
+      if (!result.committed) {
+        showToast('Cette note a changé ailleurs. Votre texte reste dans l’éditeur : copiez-le avant de recharger la note.');
+        setStatus('Conflit : texte non enregistré', 'error');
+        return false;
+      }
+      if (currentId === id) {
+        editorBase = {...result.snapshot.val(), id};
+        document.getElementById('btnHistory').disabled = !historyOf(editorBase).length;
+      }
+      setStatus(isDirty() ? 'Modifications non enregistrées' : 'Enregistré', isDirty() ? 'saving' : 'saved');
+      showToast('Enregistré ✓');
+      return true;
+    } catch (error) {
+      setStatus('Enregistrement impossible', 'error');
+      showToast('Le texte reste dans l’éditeur. Vérifiez la connexion puis réessayez.');
+      return false;
+    } finally {
+      isSaving = false;
+      document.getElementById('btnSave').disabled = false;
+    }
   };
 
-  window.togglePin = async () => {
-    const note = notes.find(n => n.id === currentId);
-    if (!note) return;
-    note.pinned = !note.pinned;
-    note.updatedAt = Date.now();
-    note.order = Number.isFinite(note.order) ? note.order : null;
-    await set(ref(db, 'notes/' + currentId), note);
-    document.getElementById("btnPin").textContent = note.pinned ? "Désépingler" : "Épingler";
-    showToast(note.pinned ? "Note épinglée" : "Note désépinglée");
-  };
-
-  window.toggleArchive = async () => {
-    const note = notes.find(n => n.id === currentId);
-    if (!note) return;
-    note.archived = !note.archived;
-    note.updatedAt = Date.now();
-    note.order = Number.isFinite(note.order) ? note.order : null;
-    await set(ref(db, 'notes/' + currentId), note);
-    hideEditor();
-    showToast(note.archived ? "Note archivée" : "Note restaurée");
-  };
-
-  window.deleteNote = async () => {
-    if (!confirm("Supprimer cette note ?")) return;
-    await remove(ref(db, 'notes/' + currentId));
-    hideEditor();
-    showToast("Supprimé");
-  };
-
-  window.hideEditor = function hideEditor() {
-    document.getElementById("editor").classList.add("hide");
-    document.querySelector(".app").classList.remove("editor-open", "editor-expanded");
-    document.getElementById("btnExpand").setAttribute("aria-pressed", "false");
-    document.getElementById("btnExpand").textContent = "Plein écran";
-    document.getElementById("editor").style.background = "";
-    currentId = null;
-    renderList();
+  async function saveBeforeAction() {
+    return !isSaving && (!isDirty() || await saveCurrentNote());
   }
 
+  window.duplicateNote = async () => {
+    if (!currentId || !await saveBeforeAction()) return;
+    const original = {...(editorBase || {}), ...draftFromEditor()};
+    const id = 'note_' + crypto.randomUUID();
+    const copy = savedNote(null, {...contentOf(original), id, title:original.title + ' (Copie)', date:getFrenchDate()}, Date.now());
+    try {
+      await set(ref(db, 'notes/' + id), copy);
+      displayNote(copy);
+      showToast('Note dupliquée ✓');
+    } catch { showToast('Impossible de dupliquer la note.'); }
+  };
+
+  async function changeNote(patch, {close = false, message = 'Note mise à jour'} = {}) {
+    if (!currentId || !await saveBeforeAction()) return false;
+    const id = currentId;
+    const baseline = editorBase;
+    if (!baseline) return false;
+    try {
+      const result = await runTransaction(ref(db, 'notes/' + id), current => {
+        if (!revisionMatches(current, baseline)) return;
+        return {...current, ...patch, revision:(Number(current.revision) || 0) + 1};
+      }, {applyLocally:false});
+      if (!result.committed) { showToast('La note a changé ailleurs. Rouvrez-la avant de réessayer.'); return false; }
+      if (currentId === id) {
+        if (close) closeEditor();
+        else displayNote({...result.snapshot.val(), id});
+      }
+      showToast(message);
+      return true;
+    } catch { showToast('Action impossible. Vérifiez la connexion puis réessayez.'); return false; }
+  }
+
+  window.togglePin = () => changeNote({pinned:!editorBase?.pinned}, {message:editorBase?.pinned ? 'Note désépinglée' : 'Note épinglée'});
+  window.toggleArchive = () => changeNote({archived:!editorBase?.archived}, {close:true, message:editorBase?.archived ? 'Note restaurée des archives' : 'Note archivée'});
+  window.restoreNote = () => changeNote({deletedAt:null}, {close:true, message:'Note restaurée'});
+
+  window.deleteNote = async () => {
+    if (!currentId) return;
+    if (!editorBase?.deletedAt) {
+      if (!editorBase && !isDirty()) { closeEditor(); return; }
+      await changeNote({deletedAt:Date.now()}, {close:true, message:'Note placée dans la corbeille'});
+      return;
+    }
+    const id = currentId;
+    if (!confirm(`Supprimer définitivement « ${editorBase.title || 'Note sans titre'} » et son historique ? Cette action est irréversible.`)) return;
+    try {
+      const result = await runTransaction(ref(db, 'notes/' + id), current => current?.deletedAt ? null : undefined, {applyLocally:false});
+      if (!result.committed) { showToast('La note a déjà été restaurée ou supprimée ailleurs.'); return; }
+      if (currentId === id) closeEditor();
+      showToast('Note supprimée définitivement');
+    } catch { showToast('Suppression impossible. La note reste dans la corbeille.'); }
+  };
+
+  function closeEditor() {
+    document.getElementById('editor').classList.add('hide');
+    document.getElementById('editor').style.background = '';
+    document.querySelector('.app').classList.remove('editor-open', 'editor-expanded');
+    document.getElementById('btnExpand').setAttribute('aria-pressed', 'false');
+    document.getElementById('btnExpand').textContent = 'Plein écran';
+    currentId = null;
+    editorBase = null;
+    renderList();
+    refreshSaveStatus();
+  }
+
+  window.hideEditor = async () => { if (await canLeaveEditor()) closeEditor(); };
+
+  window.showHistory = () => {
+    if (!currentId) return;
+    const id = currentId;
+    const note = notes.find(n => n.id === id) || editorBase;
+    const list = document.getElementById('historyList');
+    list.replaceChildren();
+    const history = historyOf(note).slice().reverse();
+    if (!history.length) list.textContent = 'Aucune version précédente pour cette note.';
+    history.forEach(version => {
+      const detail = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = `Version ${version.version + 1} — ` + (version.savedAt ? new Date(version.savedAt).toLocaleString('fr-FR') : 'Date inconnue');
+      const preview = document.createElement('pre');
+      preview.textContent = `${version.title}\n\n${version.body}\n\nÉtiquettes : ${version.tags || 'aucune'}`;
+      detail.append(summary, preview);
+      const button = document.createElement('button');
+      button.className = 'btn primary';
+      button.textContent = 'Restaurer cette version';
+      button.disabled = Boolean(note.deletedAt);
+      button.onclick = async () => {
+        if (isSaving || currentId !== id) return;
+        if (isDirty() && !confirm('Remplacer les modifications non enregistrées par cette version ?')) return;
+        const baseline = notes.find(n => n.id === id) || editorBase;
+        const now = Date.now();
+        try {
+          const result = await runTransaction(ref(db, 'notes/' + id), current => {
+            if (!revisionMatches(current, baseline) || current?.deletedAt) return;
+            return savedNote(current, {...contentOf(version), id, date:getFrenchDate()}, now);
+          }, {applyLocally:false});
+          if (!result.committed) { showToast('La note a changé ailleurs. Rouvrez son historique.'); return; }
+          displayNote({...result.snapshot.val(), id});
+          document.getElementById('historyDialog').close();
+          showToast('Version restaurée ; le contenu précédent reste dans l’historique.');
+        } catch { showToast('Impossible de restaurer cette version.'); }
+      };
+      detail.appendChild(button);
+      list.appendChild(detail);
+    });
+    document.getElementById('historyDialog').showModal();
+  };
+
+  window.exportNotes = async () => {
+    if (!auth.currentUser || !await saveBeforeAction()) return;
+    // Include a just-saved editor snapshot even if its subscription event is still pending.
+    const snapshot = notes.map(note => note.id === editorBase?.id ? editorBase : note);
+    if (editorBase && !snapshot.some(note => note.id === editorBase.id)) snapshot.push(editorBase);
+    const url = URL.createObjectURL(new Blob([exportNotebook(snapshot)], {type:'application/json;charset=utf-8'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `notepad-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Export téléchargé : notes, archives, corbeille et historique.');
+  };
+
+  for (const id of ['title', 'body', 'tagInput']) document.getElementById(id).addEventListener('input', refreshSaveStatus);
+  window.addEventListener('beforeunload', event => {
+    if (!isDirty() && !isSaving) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
   function updateCounts() {
-    document.getElementById("countNotes").textContent = notes.filter(x => !x.archived).length;
-    document.getElementById("countArch").textContent = notes.filter(x => x.archived).length;
+    document.getElementById("countNotes").textContent = notes.filter(x => matchesTab(x, "notes")).length;
+    document.getElementById("countArch").textContent = notes.filter(x => matchesTab(x, "archived")).length;
+    document.getElementById("countTrash").textContent = notes.filter(x => matchesTab(x, "trash")).length;
   }
 
   function setStatus(txt, state) {

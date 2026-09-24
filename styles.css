@@ -180,3 +180,20 @@ button, input, textarea { font-family: inherit; }
   .editor-expanded main { height: 100%; }
   header { flex-wrap: wrap; padding: 10px; }
 }
+
+#btnExport, #btnHistory { background: #f1f3f4; color: var(--text); border: 1px solid var(--border); }
+#btnRestore, .primary { background: #1a73e8; color: white; }
+button[hidden] { display: none !important; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.danger-link { background: none; border: none; color: var(--danger); cursor: pointer; font-size: .85rem; padding: 6px; }
+dialog { margin: auto; padding: 24px; width: min(640px, calc(100vw - 32px)); max-height: 85dvh; overflow: auto; border: 1px solid var(--border); border-radius: 16px; color: var(--text); background: var(--panel); box-shadow: 0 12px 50px #0003; }
+dialog::backdrop { background: #20212466; }
+dialog h2 { font-size: 1.15rem; margin-bottom: 12px; }
+dialog p { line-height: 1.5; margin: 12px 0; color: var(--muted); }
+.dialog-actions, .dialog-heading { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.dialog-actions { justify-content: flex-end; margin-top: 20px; }
+#historyList details { border-top: 1px solid var(--border); padding: 14px 0; }
+#historyList summary { cursor: pointer; font-weight: 600; }
+#historyList pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; padding: 12px; background: var(--bg); border-radius: 8px; max-height: 250px; overflow: auto; }
+#editor.is-trash .tag-zone, #editor.is-trash .color-palette { display: none; }
+.empty-state { padding: 24px 12px; color: var(--muted); grid-column: 1 / -1; }
