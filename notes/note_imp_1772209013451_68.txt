@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209013451_68"
-title: "ne pas confondre intelligence et création"
-date: "Tue Feb 03 2026 14:01:37 GMT+0100 (heure normale d’Europe centrale)"
-tags: "note"
-archived: false
-color: ""
-images: ""
----

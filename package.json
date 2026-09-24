@@ -1,0 +1,10 @@
+{
+  "name": "notepad-firebase",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check app.js && node --check notes.js && node --check preferences.js"
+  },
+  "devDependencies": {"jsdom": "26.1.0"}
+}

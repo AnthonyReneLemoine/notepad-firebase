@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209023197_107"
-title: "dietpi"
-date: "Tue Feb 03 2026 14:02:35 GMT+0100 (heure normale d’Europe centrale)"
-tags: "pc-linux-raspberry"
-archived: false
-color: ""
-images: ""
----

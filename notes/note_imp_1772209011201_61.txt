@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209011201_61"
-title: "power"
-date: "Tue Feb 03 2026 14:01:27 GMT+0100 (heure normale d’Europe centrale)"
-tags: "pc-cloud"
-archived: false
-color: ""
-images: ""
----

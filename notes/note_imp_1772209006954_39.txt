@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209006954_39"
-title: "oneplus nord bud 3 pro"
-date: "Tue Feb 03 2026 14:00:55 GMT+0100 (heure normale d’Europe centrale)"
-tags: "pc-1-hardware"
-archived: false
-color: ""
-images: ""
----
