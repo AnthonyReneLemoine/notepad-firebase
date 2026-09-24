@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209010612_58"
-title: "l'artiste qui faisait plein de trucs comme de la musique, de la danse et qui faisait aussi du visuel"
-date: "Tue Feb 03 2026 14:01:24 GMT+0100 (heure normale d’Europe centrale)"
-tags: "note"
-archived: false
-color: ""
-images: ""
----

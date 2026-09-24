@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209030785_147"
-title: "pkoi la culture nous montre les problèmes avant tout le monde"
-date: "Tue Feb 03 2026 14:03:39 GMT+0100 (heure normale d’Europe centrale)"
-tags: "note"
-archived: false
-color: ""
-images: ""
----

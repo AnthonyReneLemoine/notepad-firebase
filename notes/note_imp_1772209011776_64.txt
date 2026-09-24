@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209011776_64"
-title: "fécalome"
-date: "Tue Feb 03 2026 14:01:32 GMT+0100 (heure normale d’Europe centrale)"
-tags: "santé"
-archived: false
-color: ""
-images: ""
----

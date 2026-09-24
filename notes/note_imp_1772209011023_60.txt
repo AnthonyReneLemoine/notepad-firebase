@@ -1,9 +1,0 @@
----
-id: "note_imp_1772209011023_60"
-title: "expert"
-date: "Tue Feb 03 2026 14:01:26 GMT+0100 (heure normale d’Europe centrale)"
-tags: "pc-cloud"
-archived: false
-color: ""
-images: ""
----

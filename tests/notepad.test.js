@@ -195,3 +195,13 @@ test('export uses the latest remote note rather than a stale open editor',async(
     assert.equal(backup.notes[0].body,'Dernière version distante');
   } finally {app.close();}
 });
+
+test('permanent deletion is only available from trash and respects cancellation',async()=>{
+  const app=await boot([fixture('a',{deletedAt:1000})]);
+  try {
+    await app.w.switchTab('trash');await app.w.openNote('a');
+    app.w.confirm=()=>false;await app.w.deleteNote();assert(app.data.a);
+    app.w.confirm=()=>true;await app.w.deleteNote();assert.equal(app.data.a,undefined);
+    assert.equal(app.w.document.getElementById('countTrash').textContent,'0');
+  } finally {app.close();}
+});
