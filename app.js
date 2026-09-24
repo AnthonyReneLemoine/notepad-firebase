@@ -1,4 +1,4 @@
-import { contentOf, sameContent, historyOf, savedNote, revisionMatches, matchesTab, exportNotebook } from "./notes.js";
+import { contentOf, sameContent, historyOf, savedNote, revisionMatches, matchesTab, exportNotebook, filterNotes, sortNotes, noteDateLabel, formatDate } from "./notes.js";
 import { readPreference, writePreference } from "./preferences.js";
 import { initializeApp } from "firebase/app";
   import { getDatabase, ref, onValue, set, update, runTransaction } from "firebase/database";
@@ -19,12 +19,16 @@ import { initializeApp } from "firebase/app";
   const auth = getAuth(app);
 
   let notes = [];
+  let notesLoaded = false;
   let currentId = null;
   let editorBase = null;
   let isSaving = false;
   let navigationToken = 0;
   let currentTab = "notes";
-  let selectedTag = "a-gmva-expo";
+  let selectedTag = null;
+  let filterPreferences = {};
+  let sortMode = "manual";
+  const preferenceKey = () => `filters:${auth.currentUser?.uid || "anonymous"}`;
   let dbUnsubscribe = null;
   let currentTags = [];
   let tagSuggFocused = -1;
@@ -84,12 +88,21 @@ import { initializeApp } from "firebase/app";
       document.getElementById("loginEmail").value = "";
       document.getElementById("loginPassword").value = "";
       document.getElementById("loginError").textContent = "";
+      notesLoaded = false;
+      const saved = readPreference(preferenceKey(), {});
+      filterPreferences = saved && typeof saved === 'object' ? saved : {};
+      sortMode = ['manual','modified','title'].includes(filterPreferences.sort) ? filterPreferences.sort : 'manual';
+      document.getElementById('sortMode').value = sortMode;
+      currentTab = 'notes';
+      selectedTag = typeof filterPreferences.notes === 'string' ? filterPreferences.notes : null;
+      setTab('notes');
       document.getElementById("btnExport").disabled = false;
       init();
     } else {
       // User is signed out
       if (dbUnsubscribe) { dbUnsubscribe(); dbUnsubscribe = null; }
       notes = [];
+      notesLoaded = false;
       currentId = null;
       editorBase = null;
       document.getElementById("btnExport").disabled = true;
@@ -271,7 +284,8 @@ import { initializeApp } from "firebase/app";
     document.getElementById("overlay").style.display = "flex";
     dbUnsubscribe = onValue(ref(db, 'notes'), (snapshot) => {
       const data = snapshot.val();
-      notes = data ? Object.entries(data).filter(([, value]) => value && typeof value === "object").map(([id, value]) => ({...value, id})) : [];
+      notesLoaded = true;
+      notes = data ? Object.entries(data).filter(([, value]) => value && typeof value === "object").map(([id, value]) => ({...value, ...contentOf(value), id})) : [];
       renderTagFilter();
       renderList();
       updateCounts();
@@ -286,7 +300,7 @@ import { initializeApp } from "firebase/app";
 
   function setTab(tab) {
     currentTab = tab;
-    selectedTag = (tab === 'notes') ? 'a-gmva-expo' : null;
+    selectedTag = typeof filterPreferences[tab] === 'string' ? filterPreferences[tab] : null;
     for (const [id, value] of [['tabNotes','notes'], ['tabArch','archived'], ['tabTrash','trash']]) {
       document.getElementById(id).classList.toggle('active', tab === value);
       document.getElementById(id).setAttribute('aria-pressed', String(tab === value));
@@ -312,6 +326,11 @@ import { initializeApp } from "firebase/app";
       });
     });
 
+    if (notesLoaded && selectedTag && !allTags.has(selectedTag)) {
+      selectedTag = null;
+      filterPreferences[currentTab] = null;
+      writePreference(preferenceKey(), filterPreferences);
+    }
     if (allTags.size === 0) { $tf.style.display = "none"; return; }
     $tf.style.display = "flex";
 
@@ -320,7 +339,7 @@ import { initializeApp } from "firebase/app";
     btnAll.setAttribute("aria-pressed", String(!selectedTag));
     btnAll.className = "tf-tag" + (!selectedTag ? " active" : "");
     btnAll.textContent = "Tous";
-    btnAll.onclick = () => { selectedTag = null; renderTagFilter(); renderList(); };
+    btnAll.onclick = () => chooseTag(null);
     $tf.appendChild(btnAll);
 
     Array.from(allTags).sort().forEach(tag => {
@@ -330,36 +349,36 @@ import { initializeApp } from "firebase/app";
       el.className = "tf-tag" + (selectedTag === tag ? " active" : "");
       el.textContent = tag;
       el.onclick = () => {
-        selectedTag = (selectedTag === tag) ? null : tag;
-        renderTagFilter();
-        renderList();
+        chooseTag(selectedTag === tag ? null : tag);
       };
       $tf.appendChild(el);
     });
   };
 
+  function chooseTag(tag) {
+    selectedTag = tag;
+    filterPreferences[currentTab] = tag;
+    writePreference(preferenceKey(), filterPreferences);
+    renderTagFilter();
+    renderList();
+  }
+  window.changeSort = mode => {
+    sortMode = ['manual','modified','title'].includes(mode) ? mode : 'manual';
+    filterPreferences.sort = sortMode;
+    writePreference(preferenceKey(), filterPreferences);
+    renderList();
+  };
+  window.resetFilters = () => {
+    document.getElementById('search').value = '';
+    chooseTag(null);
+  };
   function getFilteredNotes(query) {
-    return notes.filter(n => {
-      const matchTab = matchesTab(n, currentTab);
-      const matchSearch = (n.title + n.body + n.tags).toLowerCase().includes(query);
-      const matchTag = !selectedTag || (n.tags && n.tags.split(',').map(t=>t.trim()).includes(selectedTag));
-      return matchTab && matchSearch && matchTag;
-    });
+    return filterNotes(notes, {tab:currentTab, tag:selectedTag, query});
   }
-
-  function sortNotesForDisplay(list) {
-    return list.sort((a, b) => {
-      const aOrder = Number.isFinite(a.order) ? a.order : null;
-      const bOrder = Number.isFinite(b.order) ? b.order : null;
-      if (aOrder !== null && bOrder !== null) return aOrder - bOrder;
-      if (aOrder !== null) return -1;
-      if (bOrder !== null) return 1;
-      return (b.updatedAt || 0) - (a.updatedAt || 0);
-    });
-  }
+  function sortNotesForDisplay(list) { return sortNotes(list, sortMode); }
 
   async function reorderNotes(dragId, targetId, pinnedState) {
-    if (currentTab === "trash" || !dragId || !targetId || dragId === targetId) return;
+    if (sortMode !== "manual" || currentTab === "trash" || !dragId || !targetId || dragId === targetId) return;
 
     const ordered = sortNotesForDisplay(
       notes.filter(n =>
@@ -437,7 +456,7 @@ import { initializeApp } from "firebase/app";
     const tagList = note.tags ? note.tags.split(',').map(t => t.trim()).filter(t => t !== "") : [];
     const el = document.createElement("div");
     el.className = "ni" + (note.id === currentId ? " active" : "");
-    el.draggable = !note.deletedAt;
+    el.draggable = !note.deletedAt && sortMode === "manual";
     el.dataset.noteId = note.id;
 
     el.tabIndex = 0;
@@ -454,7 +473,7 @@ import { initializeApp } from "firebase/app";
     preview.textContent = note.body || "Note vide";
     const date = document.createElement("div");
     date.className = "ni-d";
-    date.textContent = note.date || "";
+    date.textContent = noteDateLabel(note);
     el.append(title, preview, date);
     if (tagList.length) {
       const tags = document.createElement("div");
@@ -471,7 +490,7 @@ import { initializeApp } from "firebase/app";
     const bg = getColorBg(note.color || "default");
     el.style.background = bg;
 
-    if (!note.deletedAt) bindCardDnD(el, note);
+    if (!note.deletedAt && sortMode === "manual") bindCardDnD(el, note);
 
     el.onclick = () => {
       if (justDropped) return;
@@ -502,6 +521,15 @@ import { initializeApp } from "firebase/app";
     }
 
     regularNotes.forEach(n => $list.appendChild(createNoteCard(n)));
+    const total = notes.filter(n => matchesTab(n, currentTab)).length;
+    document.getElementById('resultsStatus').textContent = `${filtered.length} note${filtered.length > 1 ? 's' : ''} affichée${filtered.length > 1 ? 's' : ''} sur ${total}` + (selectedTag ? ` — Étiquette : ${selectedTag}` : '');
+    document.getElementById('btnResetFilters').disabled = !selectedTag && !query.trim();
+    if (!filtered.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty-state';
+      empty.textContent = total ? 'Aucune note ne correspond à ces filtres.' : currentTab === 'trash' ? 'La corbeille est vide.' : currentTab === 'archived' ? 'Aucune note archivée.' : 'Aucune note. Utilisez le bouton + pour commencer.';
+      $list.appendChild(empty);
+    }
   };
 
   function draftFromEditor() {
@@ -566,14 +594,29 @@ import { initializeApp } from "firebase/app";
     editor.classList.remove('hide');
     document.querySelector('.app').classList.add('editor-open');
     renderList();
+    renderNoteDates(note);
     refreshSaveStatus();
+  }
+
+  function renderNoteDates(note) {
+    document.getElementById('noteDates').textContent = [
+      note.createdAt ? `Créée : ${formatDate(note.createdAt)}` : null,
+      noteDateLabel(note),
+      note.lastViewedAt ? `Consultée : ${formatDate(note.lastViewedAt)}` : null
+    ].filter(Boolean).join(' · ');
   }
 
   window.openNote = async id => {
     const token = ++navigationToken;
     if (!await canLeaveEditor() || token !== navigationToken) return;
     const note = notes.find(n => n.id === id);
-    if (note) displayNote(note);
+    if (!note) return;
+    displayNote(note);
+    const viewedAt = Date.now();
+    renderNoteDates({...note, lastViewedAt:viewedAt});
+    // Do not await network before displaying and never recreate a deleted record.
+    runTransaction(ref(db, 'notes/' + id), current => current ? {...current, lastViewedAt:viewedAt} : undefined, {applyLocally:false})
+      .catch(() => {}); // A failed consultation timestamp must not prevent reading.
   };
 
   window.createNewNote = async () => {
@@ -606,6 +649,7 @@ import { initializeApp } from "firebase/app";
       }
       if (currentId === id) {
         editorBase = {...result.snapshot.val(), id};
+        renderNoteDates(editorBase);
         document.getElementById('btnHistory').disabled = !historyOf(editorBase).length;
       }
       setStatus(isDirty() ? 'Modifications non enregistrées' : 'Enregistré', isDirty() ? 'saving' : 'saved');
@@ -622,11 +666,14 @@ import { initializeApp } from "firebase/app";
   };
 
   async function saveBeforeAction() {
-    return !isSaving && (!isDirty() || await saveCurrentNote());
+    if (isSaving) return false;
+    if (!isDirty()) return true;
+    return await saveCurrentNote() && !isDirty();
   }
 
   window.duplicateNote = async () => {
-    if (!currentId || !await saveBeforeAction()) return;
+    const sourceId = currentId;
+    if (!sourceId || !await saveBeforeAction() || sourceId !== currentId) return;
     const original = {...(editorBase || {}), ...draftFromEditor()};
     const id = 'note_' + crypto.randomUUID();
     const copy = savedNote(null, {...contentOf(original), id, title:original.title + ' (Copie)', date:getFrenchDate()}, Date.now());
@@ -638,8 +685,8 @@ import { initializeApp } from "firebase/app";
   };
 
   async function changeNote(patch, {close = false, message = 'Note mise à jour'} = {}) {
-    if (!currentId || !await saveBeforeAction()) return false;
     const id = currentId;
+    if (!id || !await saveBeforeAction() || currentId !== id) return false;
     const baseline = editorBase;
     if (!baseline) return false;
     try {
@@ -703,7 +750,7 @@ import { initializeApp } from "firebase/app";
     history.forEach(version => {
       const detail = document.createElement('details');
       const summary = document.createElement('summary');
-      summary.textContent = `Version ${version.version + 1} — ` + (version.savedAt ? new Date(version.savedAt).toLocaleString('fr-FR') : 'Date inconnue');
+      summary.textContent = `Version ${version.version + 1} — ` + (version.savedAt ? formatDate(version.savedAt) : version.replacedAt ? `conservée le ${formatDate(version.replacedAt)}` : 'date inconnue');
       const preview = document.createElement('pre');
       preview.textContent = `${version.title}\n\n${version.body}\n\nÉtiquettes : ${version.tags || 'aucune'}`;
       detail.append(summary, preview);
@@ -736,7 +783,7 @@ import { initializeApp } from "firebase/app";
   window.exportNotes = async () => {
     if (!auth.currentUser || !await saveBeforeAction()) return;
     // Include a just-saved editor snapshot even if its subscription event is still pending.
-    const snapshot = notes.map(note => note.id === editorBase?.id ? editorBase : note);
+    const snapshot = notes.map(note => note.id === editorBase?.id && (editorBase.revision || 0) > (note.revision || 0) ? editorBase : note);
     if (editorBase && !snapshot.some(note => note.id === editorBase.id)) snapshot.push(editorBase);
     const url = URL.createObjectURL(new Blob([exportNotebook(snapshot)], {type:'application/json;charset=utf-8'}));
     const link = document.createElement('a');

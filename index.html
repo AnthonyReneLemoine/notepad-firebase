@@ -43,6 +43,16 @@
       <button id="btnNew" aria-label="Nouvelle note" title="Nouvelle note" onclick="createNewNote()">+</button>
     </div>
     <div id="tagFilter"></div>
+    <div class="list-options">
+      <label for="sortMode">Trier :</label>
+      <select id="sortMode" onchange="changeSort(this.value)">
+        <option value="manual">Ordre manuel</option>
+        <option value="modified">Dernière modification</option>
+        <option value="title">Titre</option>
+      </select>
+      <button class="btn" id="btnResetFilters" onclick="resetFilters()">Effacer les filtres</button>
+    </div>
+    <p id="resultsStatus" role="status" aria-live="polite"></p>
     <div id="notesViewport">
     <div id="pinnedWrap" class="hide">
       <div class="section-title">Épinglées</div>
@@ -79,6 +89,7 @@
       <label>Couleur :</label>
       <div id="colorSwatches"></div>
     </div>
+    <p id="noteDates" class="note-dates"></p>
     <textarea id="body" aria-label="Contenu de la note" placeholder="Commencez à écrire..."></textarea>
     <div style="text-align:right; padding-top:10px">
       <button id="btnDelete" class="danger-link" onclick="deleteNote()">Mettre à la corbeille</button>

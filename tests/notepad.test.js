@@ -9,9 +9,10 @@ const code = readFileSync(new URL('../app.js', import.meta.url), 'utf8').replace
 const fixture = (id, extras={}) => ({id, title:`Note ${id}`, body:`Texte ${id}`, tags:'a-gmva-expo', color:'default', revision:0, ...extras});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function boot(initial = [fixture('a')]) {
+async function boot(initial = [fixture('a')], preferences = {}) {
   const dom = new JSDOM(html, {url:'https://notepad.example/', runScripts:'outside-only', pretendToBeVisual:true});
   const w = dom.window;
+  for (const [key,value] of Object.entries(preferences)) w.localStorage.setItem(`notepad:${key}`,JSON.stringify(value));
   const data = Object.fromEntries(initial.map(n => [n.id, structuredClone(n)]));
   let subscriber;
   let failWrites = false;
@@ -148,5 +149,49 @@ test('rapid note selection saves into the final selected note only',async()=>{
     assert.equal(w.document.getElementById('body').value,'Texte b');
     w.document.getElementById('body').value='B modifiée';await w.saveCurrentNote();
     assert.equal(app.data.a.body,'Texte a');assert.equal(app.data.b.body,'B modifiée');
+  } finally {app.close();}
+});
+
+test('saved filters survive initial loading and switching tabs',async()=>{
+  const app=await boot([fixture('a'),fixture('b',{tags:'personnel'})], {'filters:test-user':{notes:'personnel',sort:'title'}});
+  const {w}=app;
+  try {
+    assert.equal(w.document.querySelectorAll('.ni').length,1);
+    assert.equal(w.document.querySelector('.ni').dataset.noteId,'b');
+    assert.match(w.document.getElementById('resultsStatus').textContent,/1 note affichée sur 2/);
+    await w.switchTab('archived');await w.switchTab('notes');
+    assert.equal(w.document.querySelector('.ni').dataset.noteId,'b');
+    assert.equal(w.document.getElementById('sortMode').value,'title');
+    w.resetFilters();assert.equal(w.document.querySelectorAll('.ni').length,2);
+    assert.equal(JSON.parse(w.localStorage.getItem('notepad:filters:test-user')).notes,null);
+  } finally {app.close();}
+});
+
+test('search ignores accents and spaces and requires each search term',()=>{
+  const notes=[fixture('a',{title:'Été à Sarzeau',body:'Exposition de peinture'}),fixture('b',{title:'Été',body:'Cinéma'})];
+  assert.deepEqual(model.filterNotes(notes,{query:'  ETE   PEINTURE '}).map(n=>n.id),['a']);
+  assert.equal(model.filterNotes(notes,{tab:'trash'}).length,0);
+});
+
+test('opening a note records consultation without changing modification or order',async()=>{
+  const app=await boot([fixture('a',{modifiedAt:1000,updatedAt:1000,order:4}),fixture('b',{modifiedAt:2000,order:1})]);
+  try {
+    await app.w.openNote('a');await tick();
+    assert(app.data.a.lastViewedAt>1000);assert.equal(app.data.a.modifiedAt,1000);
+    assert.equal(app.data.a.updatedAt,1000);assert.equal(app.data.a.order,4);
+    assert.deepEqual(model.sortNotes(Object.values(app.data),'modified').map(n=>n.id),['b','a']);
+    assert.match(app.w.document.getElementById('noteDates').textContent,/Consultée/);
+    const legacy=model.savedNote(fixture('old'),{id:'old',body:'modification'},3000);
+    assert.equal(legacy.createdAt,null);assert.equal(legacy.modifiedAt,3000);
+  } finally {app.close();}
+});
+
+test('export uses the latest remote note rather than a stale open editor',async()=>{
+  const app=await boot();
+  try {
+    await app.w.openNote('a');app.data.a.body='Dernière version distante';app.data.a.revision=4;app.emit();
+    await app.w.exportNotes();
+    const backup=JSON.parse(await app.exported().text());
+    assert.equal(backup.notes[0].body,'Dernière version distante');
   } finally {app.close();}
 });

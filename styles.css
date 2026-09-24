@@ -197,3 +197,10 @@ dialog p { line-height: 1.5; margin: 12px 0; color: var(--muted); }
 #historyList pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; padding: 12px; background: var(--bg); border-radius: 8px; max-height: 250px; overflow: auto; }
 #editor.is-trash .tag-zone, #editor.is-trash .color-palette { display: none; }
 .empty-state { padding: 24px 12px; color: var(--muted); grid-column: 1 / -1; }
+
+.list-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: .8rem; color: var(--muted); }
+#sortMode { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px; font: inherit; }
+#btnResetFilters { background: transparent; color: #174ea6; font-size: .75rem; padding: 6px; }
+#resultsStatus { color: var(--muted); font-size: .8rem; margin: 10px 0; }
+.note-dates { font-size: .72rem; color: var(--muted); line-height: 1.5; }
+.ni-d { text-transform: none; }
